@@ -23,14 +23,16 @@ private:
     atomic_queue<int> queue;
     int in_threads_count;
     int out_threads_count;
+    
     std::atomic_uint finished_push;
     std::atomic_uint pushed_items; 
+
     int count;
     int queue_size_;
 };
 
 tester::tester(int queue_size, int th_in, int th_out, int test_count) :
-    queue(atomic_queue<int>(std::pow(2, queue_size))),
+    queue(atomic_queue<int>(1 << queue_size)),
     in_threads_count(th_in),
     out_threads_count(th_out),
     finished_push(in_threads_count),
@@ -45,7 +47,7 @@ void tester::spam_values_in(int &value)
     for(int i = 0; i < count; i++)
         if(queue.try_push(1))
         {
-            v.push_back(i);
+            v.push_back(1);
             pushed_items++;
         }
 
@@ -68,8 +70,8 @@ void tester::spam_values_out(int &value)
     }
 
 
-    std::osyncstream(std::cout) << "pushed_items: " << pushed_items <<"\n";
-    while(pushed_items != 0)
+    //std::osyncstream(std::cout) << "pushed_items: " << pushed_items <<"\n";
+    while(pushed_items > 0)
     {
         int que_value;
         if(queue.try_pop(que_value))
@@ -116,6 +118,9 @@ void test()
     int th_in = (rand() % 6) + 1;
     int th_out = (rand() % (7 - th_in)) + 1;
     int count = (rand() % (100000)) + 1;
+
+//    th_in = 1;
+//    th_out = 1;
 
     tester test(queue_size, th_in, th_out, count);
     
