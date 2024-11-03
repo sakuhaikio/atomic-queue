@@ -21,23 +21,21 @@ public:
 
 private:
     atomic_queue<int> queue;
+
     int in_threads_count;
     int out_threads_count;
     
-    std::atomic_uint finished_push;
     std::atomic_uint pushed_items; 
 
     int count;
-    int queue_size_;
 };
 
 tester::tester(int queue_size, int th_in, int th_out, int test_count) :
     queue(atomic_queue<int>(1 << queue_size)),
     in_threads_count(th_in),
     out_threads_count(th_out),
-    finished_push(in_threads_count),
-    count(test_count),
-    queue_size_(queue_size)
+    pushed_items(th_in),
+    count(test_count)
 {
 }
 
@@ -51,15 +49,17 @@ void tester::spam_values_in(int &value)
             pushed_items++;
         }
 
-    finished_push--;
+    pushed_items--;
+
     value = std::accumulate(v.begin(), v.end(), 0);
 }
 
 void tester::spam_values_out(int &value)
 {
     std::vector<int> v;
-    while(finished_push > 0)
+    while(pushed_items > 0)
     {
+        //std::cout << "pushed_items: " << pushed_items << std::endl;
         int que_value;
         if(queue.try_pop(que_value))
         {
@@ -68,19 +68,6 @@ void tester::spam_values_out(int &value)
         }
             
     }
-
-
-    //std::osyncstream(std::cout) << "pushed_items: " << pushed_items <<"\n";
-    while(pushed_items > 0)
-    {
-        int que_value;
-        if(queue.try_pop(que_value))
-        {
-            v.push_back(que_value);
-            pushed_items--;
-        }
-    }
-
     value = std::accumulate(v.begin(), v.end(), 0);
 }
 
@@ -119,8 +106,8 @@ void test()
     int th_out = (rand() % (7 - th_in)) + 1;
     int count = (rand() % (100000)) + 1;
 
-//    th_in = 1;
-//    th_out = 1;
+    th_in = 1;
+    th_out = 1;
 
     tester test(queue_size, th_in, th_out, count);
     
@@ -129,7 +116,7 @@ void test()
     {
         std::cout << "threads_in: " << th_in << std::endl;
         std::cout << "threads_out: " << th_out << std::endl;
-        std::cout << "queue_size: " << std::pow(2,queue_size) << std::endl;
+        std::cout << "queue_size: " << (1 << queue_size) << std::endl;
         std::cout << "test count: " << count << std::endl;
         std::cout << test_result << std::endl;
         std::cout << std::endl;
