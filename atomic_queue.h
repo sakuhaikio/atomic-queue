@@ -3,7 +3,6 @@
 
 constexpr int CACHE_LINE_SIZE = 64;
 
-
 template<typename T>
 class atomic_queue
 {
