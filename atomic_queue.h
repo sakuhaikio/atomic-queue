@@ -1,8 +1,8 @@
 #include <atomic>
 #include <concepts>
-#include <iostream>
 
 constexpr int CACHE_LINE_SIZE = 64;
+
 
 template<typename T>
 class atomic_queue
@@ -23,6 +23,9 @@ public:
     constexpr bool try_push(const T& t) noexcept { return emplace(t); };
     constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
     constexpr bool try_pop(T& value);
+
+    alignas(CACHE_LINE_SIZE) std::atomic_llong in = 0;
+    alignas(CACHE_LINE_SIZE) std::atomic_llong out = 0;
 private:
 
     template<typename... Args>
@@ -64,18 +67,23 @@ template<typename T>
 template<typename... Args>
 bool atomic_queue<T>::emplace(Args... args)
 {
-    unsigned current_write = reserved_write_.load();
+    unsigned current_write = reserved_write_.load(std::memory_order_relaxed);
     do
-        if(((current_write + 1) & size_) == read_.load())
+        if(((current_write + 1) & size_) == read_.load(std::memory_order_relaxed))
             return false;
-    while(!reserved_write_.compare_exchange_strong(current_write, (current_write + 1) & size_));
+    while(!reserved_write_.compare_exchange_strong(
+        current_write, (current_write + 1) & size_,
+        std::memory_order_acquire,
+        std::memory_order_relaxed));
 
     buffer_[current_write].add_data(std::forward<Args>(args)...);
 
     unsigned t;
     do
         t = current_write;
-    while(!write_.compare_exchange_strong(t, (current_write + 1) & size_));
+    while(!write_.compare_exchange_strong(t, (current_write + 1) & size_,
+        std::memory_order_relaxed,
+        std::memory_order_relaxed));
 
     return true;
 }
@@ -83,18 +91,22 @@ bool atomic_queue<T>::emplace(Args... args)
 template<typename T>
 constexpr bool atomic_queue<T>::try_pop(T& value)
 {
-    unsigned current_read = reserved_read_.load();
+    unsigned current_read = reserved_read_.load(std::memory_order_relaxed);
     do
-        if(current_read == write_.load())
+        if(current_read == write_.load(std::memory_order_relaxed))
             return false;
-    while(!reserved_read_.compare_exchange_strong(current_read, (current_read + 1) & size_));
+    while(!reserved_read_.compare_exchange_strong(current_read, (current_read + 1) & size_,
+        std::memory_order_acquire,
+        std::memory_order_relaxed));
 
     value = std::move(buffer_[current_read].move());
 
     unsigned t;
     do
         t = current_read;
-    while(!read_.compare_exchange_strong(t, (current_read + 1) & size_));
+    while(!read_.compare_exchange_strong(t, (current_read + 1) & size_,
+        std::memory_order_relaxed,
+        std::memory_order_relaxed));
 
     return true;
 }
