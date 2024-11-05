@@ -1,5 +1,8 @@
 #include <atomic>
 #include <concepts>
+#include <iostream>
+
+constexpr int CACHE_LINE_SIZE = 64;
 
 template<typename T>
 class atomic_queue
@@ -20,19 +23,18 @@ public:
     constexpr bool try_push(const T& t) noexcept { return emplace(t); };
     constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
     constexpr bool try_pop(T& value);
-
 private:
 
     template<typename... Args>
     bool emplace(Args... args);
 
-    std::atomic_uint read_;
-    std::atomic_uint write_;
-    std::atomic_uint reserved_read_;
-    std::atomic_uint reserved_write_;
+    alignas(CACHE_LINE_SIZE) std::atomic_uint read_;
+    alignas(CACHE_LINE_SIZE) std::atomic_uint write_;
+    alignas(CACHE_LINE_SIZE) std::atomic_uint reserved_read_;
+    alignas(CACHE_LINE_SIZE) std::atomic_uint reserved_write_;
 
-    container<T>* buffer_;
-    size_t size_;
+    alignas(CACHE_LINE_SIZE) container<T>* buffer_;
+    const size_t size_;
 };
 
 template<typename T>
@@ -58,15 +60,6 @@ constexpr U&& atomic_queue<T>::container<U>::move()
     return reinterpret_cast<U&&>(data);
 }
 
-/* x.compare_exchange_strong(y,z):
-     Atomically:
-       if x == y
-           x = z
-           return true
-       else 
-           y = x
-           return false
-*/
 template<typename T>
 template<typename... Args>
 bool atomic_queue<T>::emplace(Args... args)
@@ -79,10 +72,10 @@ bool atomic_queue<T>::emplace(Args... args)
 
     buffer_[current_write].add_data(std::forward<Args>(args)...);
 
-    unsigned tmp;
+    unsigned t;
     do
-        tmp = current_write;
-    while(!write_.compare_exchange_strong(tmp, (current_write + 1) & size_));
+        t = current_write;
+    while(!write_.compare_exchange_strong(t, (current_write + 1) & size_));
 
     return true;
 }
@@ -98,10 +91,10 @@ constexpr bool atomic_queue<T>::try_pop(T& value)
 
     value = std::move(buffer_[current_read].move());
 
-    unsigned tmp;
+    unsigned t;
     do
-        tmp = current_read;
-    while(!read_.compare_exchange_strong(tmp, (current_read + 1) & size_));
+        t = current_read;
+    while(!read_.compare_exchange_strong(t, (current_read + 1) & size_));
 
     return true;
 }
