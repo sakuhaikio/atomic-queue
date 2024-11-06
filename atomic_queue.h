@@ -9,8 +9,11 @@ class atomic_queue
     template<typename U>
     struct container
     {
+        container();
+        ~container();
         template<typename... Args>
         constexpr void add_data(Args&&... args);
+        constexpr void destroy_data();
         constexpr U&& move();
 
         alignas(alignof(U)) unsigned char data[sizeof(U)];
@@ -19,12 +22,11 @@ class atomic_queue
 public:
 
     atomic_queue(const size_t size = 64);
+    ~atomic_queue() noexcept;
     constexpr bool try_push(const T& t) noexcept { return emplace(t); };
     constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
     constexpr bool try_pop(T& value);
 
-    alignas(CACHE_LINE_SIZE) std::atomic_llong in = 0;
-    alignas(CACHE_LINE_SIZE) std::atomic_llong out = 0;
 private:
 
     template<typename... Args>
@@ -48,11 +50,39 @@ atomic_queue<T>::atomic_queue(const size_t size) :
 }
 
 template<typename T>
+atomic_queue<T>::~atomic_queue() noexcept
+{
+    for(int i = 0; i < size_ + 1; ++i)
+        buffer_[i].~container();
+    delete[] buffer_;
+}
+
+template<typename T>
+template<typename U>
+atomic_queue<T>::container<U>::container()
+{
+}
+
+template<typename T>
+template<typename U>
+atomic_queue<T>::container<U>::~container()
+{
+    destroy_data();
+}
+
+template<typename T>
 template<typename U>
 template<typename... Args>
 constexpr void atomic_queue<T>::container<U>::add_data(Args&&... args)
 {
     new(&data) U(std::forward<Args>(args)...);
+}
+
+template<typename T>
+template<typename U>
+constexpr void atomic_queue<T>::container<U>::destroy_data()
+{
+    reinterpret_cast<U*>(&data)->~U();
 }
 
 template<typename T>
@@ -98,7 +128,9 @@ constexpr bool atomic_queue<T>::try_pop(T& value)
         std::memory_order_acquire,
         std::memory_order_relaxed));
 
-    value = std::move(buffer_[current_read].move());
+    container<T>* can = buffer_ + current_read;
+    value = std::move(can->move());
+    can->destroy_data();
 
     unsigned t;
     do
