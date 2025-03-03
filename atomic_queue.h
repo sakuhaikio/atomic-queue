@@ -1,6 +1,9 @@
 #include <atomic>
 #include <concepts>
 
+namespace atomiring
+{
+
 constexpr int CACHE_LINE_SIZE = 64;
 
 template<typename T>
@@ -23,7 +26,6 @@ class atomic_queue
         unsigned a;
         unsigned b;
     };
-
 
 public:
 
@@ -65,8 +67,8 @@ atomic_queue<T>::atomic_queue(const unsigned size) :
 template<typename T>
 atomic_queue<T>::~atomic_queue() noexcept
 {
-    while(rr_w_.load().b != rw_r_.load().b)
-        buffer_[rw_r_.exchange({rw_r_.load().a, (rw_r_.load().b + 1) & size_}, 
+    while(rr_w_.load(std::memory_order_relaxed).b != rw_r_.load(std::memory_order_relaxed).b)
+        buffer_[rw_r_.exchange({rw_r_.load(std::memory_order_relaxed).a, (rw_r_.load(std::memory_order_relaxed).b + 1) & size_}, 
             std::memory_order_relaxed).b].destroy_data();
         
     delete[] buffer_;
@@ -104,20 +106,25 @@ template<typename T>
 template<typename... Args>
 bool atomic_queue<T>::emplace(Args&&... args)
 {
-    S curr_rw_r = rw_r_.load();
+    S curr_rw_r = rw_r_.load(std::memory_order_relaxed);
     do
         if(((curr_rw_r.a + 1) & size_) == curr_rw_r.b)
             return false;
     while(! rw_r_.compare_exchange_strong(
         curr_rw_r, 
-        {(curr_rw_r.a + 1) & size_, curr_rw_r.b}));
+        {(curr_rw_r.a + 1) & size_, curr_rw_r.b},
+        std::memory_order_acquire,
+        std::memory_order_relaxed));
 
     buffer_[curr_rw_r.a].add_data(std::forward<Args>(args)...);
 
-    S t = rr_w_.load();
-    do t.b = curr_rw_r.a;
+    S t = rr_w_.load(std::memory_order_relaxed);
+    do 
+        t.b = curr_rw_r.a;
     while(!rr_w_.compare_exchange_strong(
-        t, {t.a, (t.b + 1) & size_}));
+        t, {t.a, (t.b + 1) & size_},
+        std::memory_order_release,
+        std::memory_order_relaxed));
 
     return true;
 }
@@ -125,22 +132,29 @@ bool atomic_queue<T>::emplace(Args&&... args)
 template<typename T>
 bool atomic_queue<T>::try_pop(T& value)
 {
-    S curr_rr_w = rr_w_.load();
+    S curr_rr_w = rr_w_.load(std::memory_order_relaxed);
     do
         if(curr_rr_w.a == curr_rr_w.b)
             return false;
     while(! rr_w_.compare_exchange_strong(
         curr_rr_w, 
-        {(curr_rr_w.a + 1) & size_, curr_rr_w.b}));
+        {(curr_rr_w.a + 1) & size_, curr_rr_w.b},
+        std::memory_order_acquire,
+        std::memory_order_relaxed));
 
     container* can = buffer_ + curr_rr_w.a;
     value = std::move(can->move());
     can->destroy_data();
 
-    S t = rw_r_.load();
-    do t.b = curr_rr_w.a;
+    S t = rw_r_.load(std::memory_order_relaxed);
+    do 
+        t.b = curr_rr_w.a;
     while(!rw_r_.compare_exchange_strong(
-        t, {t.a, (t.b + 1) & size_}));
+        t, {t.a, (t.b + 1) & size_},
+        std::memory_order_release,
+        std::memory_order_relaxed));
 
     return true;
+}
+
 }
