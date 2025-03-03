@@ -1,6 +1,5 @@
 #include <atomic>
 #include <concepts>
-#include <iostream>
 
 constexpr int CACHE_LINE_SIZE = 64;
 
@@ -19,6 +18,13 @@ class atomic_queue
         alignas(alignof(T)) unsigned char data[sizeof(T)];
     };
 
+    struct S
+    {
+        unsigned a;
+        unsigned b;
+    };
+
+
 public:
 
     atomic_queue(const unsigned size = 64);
@@ -32,27 +38,22 @@ public:
     constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
     bool try_pop(T& value);
 
-//private:
+private:
 
     template<typename... Args>
     bool emplace(Args&&... args);
 
-    alignas(CACHE_LINE_SIZE) std::atomic_uint read_;
-    alignas(CACHE_LINE_SIZE) std::atomic_uint write_;
-    alignas(CACHE_LINE_SIZE) std::atomic_uint reserved_read_;
-    alignas(CACHE_LINE_SIZE) std::atomic_uint reserved_write_;
+    alignas(CACHE_LINE_SIZE) std::atomic<S> rr_w_;
+    alignas(CACHE_LINE_SIZE) std::atomic<S> rw_r_;
 
     alignas(CACHE_LINE_SIZE) container* buffer_;
+
     unsigned size_;
-
-    std::atomic_flag flag_A = ATOMIC_FLAG_INIT;
-    std::atomic_flag flag_B = ATOMIC_FLAG_INIT;
-
 };
 
 template<typename T>
 atomic_queue<T>::atomic_queue(const unsigned size) :
-    read_(0), write_(0), reserved_read_(0), reserved_write_(0)
+    rr_w_({0, 0}), rw_r_({0, 0})
 {
     size_ = (size | 0xF) & 0xFFFF;
     for(unsigned i = 1; i <= 16; i *= 2)
@@ -64,9 +65,9 @@ atomic_queue<T>::atomic_queue(const unsigned size) :
 template<typename T>
 atomic_queue<T>::~atomic_queue() noexcept
 {
-    while(read_ != write_)
-        buffer_[read_.exchange((read_.load(std::memory_order_relaxed) + 1) & size_, 
-            std::memory_order_relaxed)].destroy_data();
+    while(rr_w_.load().b != rw_r_.load().b)
+        buffer_[rw_r_.exchange({rw_r_.load().a, (rw_r_.load().b + 1) & size_}, 
+            std::memory_order_relaxed).b].destroy_data();
         
     delete[] buffer_;
 }
@@ -103,30 +104,43 @@ template<typename T>
 template<typename... Args>
 bool atomic_queue<T>::emplace(Args&&... args)
 {
-    unsigned current_write = reserved_write_.load();
-    if(((current_write + 1) & size_) == read_.load())
-        return false;
-    reserved_write_.store((current_write + 1) & size_);
+    S curr_rw_r = rw_r_.load();
+    do
+        if(((curr_rw_r.a + 1) & size_) == curr_rw_r.b)
+            return false;
+    while(! rw_r_.compare_exchange_strong(
+        curr_rw_r, 
+        {(curr_rw_r.a + 1) & size_, curr_rw_r.b}));
 
-    buffer_[current_write].add_data(std::forward<Args>(args)...);
+    buffer_[curr_rw_r.a].add_data(std::forward<Args>(args)...);
 
-    write_.store((current_write + 1) & size_);
+    S t = rr_w_.load();
+    do t.b = curr_rw_r.a;
+    while(!rr_w_.compare_exchange_strong(
+        t, {t.a, (t.b + 1) & size_}));
+
     return true;
 }
 
 template<typename T>
 bool atomic_queue<T>::try_pop(T& value)
 {
-    unsigned current_read = reserved_read_.load();
-    if(current_read == write_.load())
-        return false;
+    S curr_rr_w = rr_w_.load();
+    do
+        if(curr_rr_w.a == curr_rr_w.b)
+            return false;
+    while(! rr_w_.compare_exchange_strong(
+        curr_rr_w, 
+        {(curr_rr_w.a + 1) & size_, curr_rr_w.b}));
 
-    reserved_read_.store((current_read + 1) & size_);
-
-    container* can = buffer_ + current_read;
+    container* can = buffer_ + curr_rr_w.a;
     value = std::move(can->move());
     can->destroy_data();
 
-    read_.store((current_read + 1) & size_);
+    S t = rw_r_.load();
+    do t.b = curr_rr_w.a;
+    while(!rw_r_.compare_exchange_strong(
+        t, {t.a, (t.b + 1) & size_}));
+
     return true;
 }
