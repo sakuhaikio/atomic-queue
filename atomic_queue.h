@@ -1,7 +1,7 @@
 #include <atomic>
 #include <concepts>
 
-namespace atomiring
+namespace atomic_ring
 {
 
 constexpr int CACHE_LINE_SIZE = 64;
