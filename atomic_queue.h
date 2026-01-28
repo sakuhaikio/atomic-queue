@@ -1,11 +1,13 @@
 #include <atomic>
 #include <concepts>
 #include <memory>
+#include <new>
 
 namespace atomic_ring
 {
 
-constexpr int CACHE_LINE_SIZE = 64;
+inline constexpr std::size_t CACHE_LINE_SIZE =
+    std::hardware_destructive_interference_size;
 
 constexpr uint32_t lo32(uint64_t n) noexcept 
 {
@@ -17,7 +19,7 @@ constexpr uint32_t hi32(uint64_t n) noexcept
     return uint32_t(n >> 32); 
 }
 
-constexpr uint64_t pack64(uint32_t lo, uint32_t hi) noexcept
+constexpr uint64_t pack_u32x2(uint32_t lo, uint32_t hi) noexcept
 {
     return (uint64_t(hi) << 32) | uint64_t(lo);
 }
@@ -34,17 +36,17 @@ class atomic_queue
         constexpr void destroy_data();
         constexpr T&& move();
 
-        alignas(alignof(T)) uint8_t data[sizeof(T)];
+        alignas(alignof(T)) std::byte data[sizeof(T)];
     };
 
 public:
 
-    atomic_queue(const uint32_t size = 64);
-    ~atomic_queue() noexcept;
-
+    explicit atomic_queue(const uint32_t size = 64);
     atomic_queue() noexcept = delete;
     atomic_queue(atomic_queue<T> const&) = delete;
     atomic_queue<T>& operator=(atomic_queue<T> const&) = delete;
+
+    ~atomic_queue() noexcept;
 
     constexpr bool try_push(const T& t) noexcept { return emplace(t); };
     constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
@@ -55,16 +57,16 @@ private:
     template<typename... Args>
     bool emplace(Args&&... args);
 
-    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> rr_w_bits;
-    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> rw_r_bits;
+    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> r_rw_;
+    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> rr_w_;
 
-    alignas(CACHE_LINE_SIZE) std::unique_ptr<container[]> buffer_;
+    std::unique_ptr<container[]> buffer_;
     uint32_t size_;
 };
 
 template<typename T>
 atomic_queue<T>::atomic_queue(const unsigned size) :
-    rw_r_bits(0), rr_w_bits(0)
+    r_rw_(0), rr_w_(0)
 {
     size_ = (size | 0xF) & 0xFFFF;
     for(unsigned i = 1; i <= 16; i *= 2)
@@ -76,9 +78,9 @@ atomic_queue<T>::atomic_queue(const unsigned size) :
 template<typename T>
 atomic_queue<T>::~atomic_queue() noexcept
 {
-//    while(rr_w_.load(std::memory_order_relaxed).b != rw_r_.load(std::memory_order_relaxed).b)
-//        buffer_[rw_r_.exchange({rw_r_.load(std::memory_order_relaxed).a, (rw_r_.load(std::memory_order_relaxed).b + 1) & size_}, 
-//            std::memory_order_relaxed).b].destroy_data();
+    const uint32_t w = hi32(rr_w_.load(std::memory_order_relaxed));
+    for(uint32_t r = lo32(r_rw_.load(std::memory_order_relaxed)); r != w; r = ++r & size_)
+        buffer_[r].destroy_data();
 }
 
 template<typename T> atomic_queue<T>::container::container()
@@ -113,33 +115,36 @@ template<typename T>
 template<typename... Args>
 bool atomic_queue<T>::emplace(Args&&... args)
 {
-    uint64_t curr_rw_r = rw_r_bits.load(std::memory_order_relaxed);
-    uint32_t rw; uint32_t r;
+    // move write reservation
+    uint64_t r_rw = r_rw_.load(std::memory_order_relaxed);
+    uint32_t r, rw;
     do
     {
-        rw = lo32(curr_rw_r);
-        r = hi32(curr_rw_r);
+        r = lo32(r_rw);
+        rw = hi32(r_rw);
+
         if(((rw + 1) & size_) == r)
             return false;
     }
-    while(! rw_r_bits.compare_exchange_strong(
-        curr_rw_r, 
-        pack64(rw + 1 & size_, r),
+    while(!r_rw_.compare_exchange_strong(
+        r_rw, pack_u32x2(r, (rw + 1) & size_),
         std::memory_order_acquire,
         std::memory_order_relaxed));
 
+    // write data 
     buffer_[rw].add_data(std::forward<Args>(args)...);
 
-    uint64_t curr_rr_w = rr_w_bits.load(std::memory_order_relaxed);
-    uint32_t rr; uint32_t w;
-    do 
+
+    // move write finished
+    uint64_t rr_w = rr_w_.load(std::memory_order_relaxed);
+    uint32_t rr;
+    do
     {
-        rr = lo32(curr_rr_w);
-        w = rw;
+        rr = lo32(rr_w);
+        rr_w = pack_u32x2(rr, rw);
     }
-    while(!rr_w_bits.compare_exchange_strong(
-        curr_rr_w, 
-        pack64(rr, (w + 1) & size_),
+    while(!rr_w_.compare_exchange_strong(
+        rr_w, pack_u32x2(rr, (rw + 1) & size_),
         std::memory_order_release,
         std::memory_order_relaxed));
 
@@ -149,33 +154,37 @@ bool atomic_queue<T>::emplace(Args&&... args)
 template<typename T>
 bool atomic_queue<T>::try_pop(T& value)
 {
-    uint64_t curr_rr_w = rr_w_bits.load(std::memory_order_relaxed);
-    uint32_t rr; uint32_t w;
+    // move read reservation
+    uint64_t rr_w = rr_w_.load(std::memory_order_relaxed);
+    uint32_t rr, w;
     do
     {
-        rr = lo32(curr_rr_w);
-        w = hi32(curr_rr_w);
+        rr = lo32(rr_w);
+        w = hi32(rr_w);
+
         if(rr == w)
             return false;
     }
-    while(! rr_w_bits.compare_exchange_strong(
-        curr_rr_w, pack64((rr + 1) & size_, w),
+    while(!rr_w_.compare_exchange_strong(
+        rr_w, pack_u32x2((rr + 1) & size_, w),
         std::memory_order_acquire,
         std::memory_order_relaxed));
 
+    // read data
     container* can = buffer_.get() + rr;
     value = std::move(can->move());
     can->destroy_data();
 
-    uint64_t curr_rw_r = rw_r_bits.load(std::memory_order_relaxed);
-    uint32_t rw; uint32_t r;
-    do 
+    // move read finished
+    uint64_t r_rw = r_rw_.load(std::memory_order_relaxed);
+    uint32_t rw;
+    do
     {
-        rw = lo32(curr_rw_r);
-        r = rr;
+        rw = hi32(r_rw);
+        r_rw = pack_u32x2(rr, rw);
     }
-    while(!rw_r_bits.compare_exchange_strong(
-        curr_rw_r, pack64(rw, (r + 1) & size_),
+    while(!r_rw_.compare_exchange_strong(
+        r_rw, pack_u32x2((rr + 1) & size_, rw),
         std::memory_order_release,
         std::memory_order_relaxed));
 
