@@ -56,8 +56,8 @@ private:
     template<typename... Args>
     bool emplace(Args&&... args);
 
-    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> r_rw_;
-    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> rr_w_;
+    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> r_rw_; // pair: read and write reservation
+    alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> rr_w_; // pair: read reservation and write
 
     std::unique_ptr<container[]> buffer_;
     uint32_t size_;
@@ -67,6 +67,7 @@ template<typename T>
 atomic_queue<T>::atomic_queue(const unsigned size) :
     r_rw_(0), rr_w_(0)
 {
+    // find next valid ring size, must be 2^n
     size_ = (size | 0xF) & 0xFFFF;
     for(unsigned i = 1; i <= 16; i *= 2)
         size_ |= size_ >> i;
