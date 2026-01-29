@@ -25,7 +25,7 @@ constexpr uint64_t pack_u32x2(uint32_t lo, uint32_t hi) noexcept
 }
 
 template<typename T>
-class atomic_queue
+class queue
 {
     struct container
     {
@@ -41,11 +41,11 @@ class atomic_queue
 
 public:
 
-    explicit atomic_queue(const uint32_t size = 64);
-    atomic_queue(atomic_queue<T> const&) = delete;
-    atomic_queue<T>& operator=(atomic_queue<T> const&) = delete;
+    explicit queue(const uint32_t size = 64);
+    queue(queue<T> const&) = delete;
+    queue<T>& operator=(queue<T> const&) = delete;
 
-    ~atomic_queue() noexcept;
+    ~queue() noexcept;
 
     constexpr bool try_push(const T& t) noexcept { return emplace(t); };
     constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
@@ -64,7 +64,7 @@ private:
 };
 
 template<typename T>
-atomic_queue<T>::atomic_queue(const unsigned size) :
+queue<T>::queue(const unsigned size) :
     r_rw_(0), rr_w_(0)
 {
     // find next valid ring size, must be 2^n
@@ -76,44 +76,44 @@ atomic_queue<T>::atomic_queue(const unsigned size) :
 }
 
 template<typename T>
-atomic_queue<T>::~atomic_queue() noexcept
+queue<T>::~queue() noexcept
 {
     const uint32_t w = hi_u32(rr_w_.load(std::memory_order_relaxed));
     for(uint32_t r = lo_u32(r_rw_.load(std::memory_order_relaxed)); r != w; r = ++r & size_)
         buffer_[r].destroy_data();
 }
 
-template<typename T> atomic_queue<T>::container::container()
+template<typename T> queue<T>::container::container()
 {
 }
 
 template<typename T>
-atomic_queue<T>::container::~container()
+queue<T>::container::~container()
 {
 }
 
 template<typename T>
 template<typename... Args>
-constexpr void atomic_queue<T>::container::add_data(Args&&... args)
+constexpr void queue<T>::container::add_data(Args&&... args)
 {
     ::new(&data) T(std::forward<Args>(args)...);
 }
 
 template<typename T>
-constexpr void atomic_queue<T>::container::destroy_data()
+constexpr void queue<T>::container::destroy_data()
 {
     reinterpret_cast<T*>(&data)->~T();
 }
 
 template<typename T>
-constexpr T&& atomic_queue<T>::container::move()
+constexpr T&& queue<T>::container::move()
 {
     return reinterpret_cast<T&&>(data);
 }
 
 template<typename T>
 template<typename... Args>
-bool atomic_queue<T>::emplace(Args&&... args)
+bool queue<T>::emplace(Args&&... args)
 {
     // move write reservation
     uint64_t r_rw = r_rw_.load(std::memory_order_relaxed);
@@ -151,7 +151,7 @@ bool atomic_queue<T>::emplace(Args&&... args)
 }
 
 template<typename T>
-bool atomic_queue<T>::try_pop(T& value)
+bool queue<T>::try_pop(T& value)
 {
     // move read reservation
     uint64_t rr_w = rr_w_.load(std::memory_order_relaxed);
