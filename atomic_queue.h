@@ -9,12 +9,12 @@ namespace atomic_ring
 inline constexpr std::size_t CACHE_LINE_SIZE =
     std::hardware_destructive_interference_size;
 
-constexpr uint32_t lo32(uint64_t n) noexcept 
+constexpr uint32_t lo_u32(uint64_t n) noexcept 
 {
     return uint32_t(n); 
 }
 
-constexpr uint32_t hi32(uint64_t n) noexcept
+constexpr uint32_t hi_u32(uint64_t n) noexcept
 {
     return uint32_t(n >> 32); 
 }
@@ -42,7 +42,6 @@ class atomic_queue
 public:
 
     explicit atomic_queue(const uint32_t size = 64);
-    atomic_queue() noexcept = delete;
     atomic_queue(atomic_queue<T> const&) = delete;
     atomic_queue<T>& operator=(atomic_queue<T> const&) = delete;
 
@@ -78,8 +77,8 @@ atomic_queue<T>::atomic_queue(const unsigned size) :
 template<typename T>
 atomic_queue<T>::~atomic_queue() noexcept
 {
-    const uint32_t w = hi32(rr_w_.load(std::memory_order_relaxed));
-    for(uint32_t r = lo32(r_rw_.load(std::memory_order_relaxed)); r != w; r = ++r & size_)
+    const uint32_t w = hi_u32(rr_w_.load(std::memory_order_relaxed));
+    for(uint32_t r = lo_u32(r_rw_.load(std::memory_order_relaxed)); r != w; r = ++r & size_)
         buffer_[r].destroy_data();
 }
 
@@ -120,8 +119,8 @@ bool atomic_queue<T>::emplace(Args&&... args)
     uint32_t r, rw;
     do
     {
-        r = lo32(r_rw);
-        rw = hi32(r_rw);
+        r = lo_u32(r_rw);
+        rw = hi_u32(r_rw);
 
         if(((rw + 1) & size_) == r)
             return false;
@@ -134,13 +133,12 @@ bool atomic_queue<T>::emplace(Args&&... args)
     // write data 
     buffer_[rw].add_data(std::forward<Args>(args)...);
 
-
     // move write finished
     uint64_t rr_w = rr_w_.load(std::memory_order_relaxed);
     uint32_t rr;
     do
     {
-        rr = lo32(rr_w);
+        rr = lo_u32(rr_w);
         rr_w = pack_u32x2(rr, rw);
     }
     while(!rr_w_.compare_exchange_strong(
@@ -159,8 +157,8 @@ bool atomic_queue<T>::try_pop(T& value)
     uint32_t rr, w;
     do
     {
-        rr = lo32(rr_w);
-        w = hi32(rr_w);
+        rr = lo_u32(rr_w);
+        w = hi_u32(rr_w);
 
         if(rr == w)
             return false;
@@ -180,7 +178,7 @@ bool atomic_queue<T>::try_pop(T& value)
     uint32_t rw;
     do
     {
-        rw = hi32(r_rw);
+        rw = hi_u32(r_rw);
         r_rw = pack_u32x2(rr, rw);
     }
     while(!r_rw_.compare_exchange_strong(
