@@ -1,13 +1,17 @@
 #include <atomic>
 #include <concepts>
 #include <memory>
-#include <new>
+#include <new> // std::hardware_destructive_interference_size + feature-test macro
 
 namespace atomic_ring
 {
 
+#if defined(__cpp_lib_hardware_interference_size) && (__cpp_lib_hardware_interference_size >= 201703L)
 inline constexpr std::size_t CACHE_LINE_SIZE =
     std::hardware_destructive_interference_size;
+#else
+inline constexpr std::size_t CACHE_LINE_SIZE = 64;
+#endif
 
 constexpr uint32_t lo_u32(uint64_t n) noexcept 
 {
