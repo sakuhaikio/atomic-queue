@@ -51,8 +51,16 @@ public:
 
     ~queue() noexcept;
 
-    constexpr bool try_push(const T& t) noexcept { return emplace(t); };
-    constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept { return emplace(t); };
+    constexpr bool try_push(const T& t) noexcept
+    { 
+        return emplace(t);
+    };
+
+    constexpr bool try_push(std::convertible_to<T> auto&& t) noexcept 
+    {
+        return emplace(std::forward<decltype(t)>(t));
+    }
+
     bool try_pop(T& value);
 
 private:
