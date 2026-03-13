@@ -7,6 +7,7 @@
 #include <random>
 #include <concepts>
 #include <math.h>
+#include <chrono>
 
 const int THREAD_COUNT = (std::thread::hardware_concurrency() ? (int)std::thread::hardware_concurrency() : 8);
 
@@ -50,16 +51,18 @@ int main()
         std::vector<std::thread> out_pool;
         std::barrier start_line(total_theads);
 
-        atomic_ring::queue<int> queue(queue_size);
+
+        atomic_ring::queue<int> queue(1024);
         
         std::atomic<int> counter = 0;
         std::atomic<int> pushing = in_out_split + 1;
 
+        auto start = std::chrono::high_resolution_clock::now();
         for(int id = 0; id < in_out_split; ++id)
         {
             in_pool.emplace_back([&](){
                 start_line.arrive_and_wait();
-                for(int i = 0; i < 10000; ++i)
+                for(int i = 0; i < 100000; ++i)
                     if(queue.try_push(1))
                         counter.fetch_add(1, std::memory_order_relaxed);        
             });
@@ -72,10 +75,23 @@ int main()
             out_pool.emplace_back([&](){
                 start_line.arrive_and_wait();
                 int result;
-                while(pushing.load(std::memory_order_relaxed) > 0 || counter.load(std::memory_order_relaxed) > 0)
-                    if(queue.try_pop(result))
-                        counter.fetch_add(-result, std::memory_order_relaxed);        
+                int retry_counter = 0;
 
+                while(pushing.load(std::memory_order_relaxed) > 0 || counter.load(std::memory_order_relaxed) > 0)
+                {
+                    if(queue.try_pop(result))
+                    {
+                        counter.fetch_add(-result, std::memory_order_relaxed);        
+                    }
+                    else
+                    {
+                        if (++retry_counter >= 5)
+                        {
+                            std::this_thread::yield();
+                            retry_counter = 0;
+                        }
+                    }
+                }
             });
         }
 
@@ -83,10 +99,14 @@ int main()
         pushing.fetch_add(-1); 
         for (auto& t : out_pool) t.join();
 
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
         std::cout << "TEST NUMBER: " << d << std::endl;
         std::cout << "  pushing threads: " << in_out_split << std::endl;
         std::cout << "  popping threads: " << total_theads - in_out_split << std::endl;
         std::cout << "  queue_size : " << queue_size << std::endl;
+        std::cout << "  time : " << duration << std::endl;
         if(counter != 0)
         {
             return 1;

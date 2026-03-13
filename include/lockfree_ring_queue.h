@@ -1,7 +1,7 @@
 #include <atomic>
 #include <concepts>
 #include <memory>
-#include <new> // std::hardware_destructive_interference_size + feature-test macro
+#include <new> // std::hardware_destructive_interference_size
 
 namespace atomic_ring
 {
@@ -80,7 +80,7 @@ queue<T>::queue(const unsigned size) :
     r_rw_(0), rr_w_(0)
 {
     // find next valid ring size, must be 2^n
-    size_ = (size | 0xF) & 0xFFFF;
+    size_ = (size-1 | 0x3); // minimum size is 1
     for(unsigned i = 1; i <= 16; i *= 2)
         size_ |= size_ >> i;
 
