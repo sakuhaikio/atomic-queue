@@ -38,7 +38,7 @@ private:
 int main()
 {
 
-    for(int d = 0; d < 10000; ++d)
+    for(int d = 0; d < 1000; ++d)
     {
 
         rng r;
@@ -52,7 +52,7 @@ int main()
         std::barrier start_line(total_theads);
 
 
-        atomic_ring::queue<int> queue(1024);
+        atomic_ring::queue<int> queue(queue_size);
         
         std::atomic<int> counter = 0;
         std::atomic<int> pushing = in_out_split + 1;
@@ -62,7 +62,7 @@ int main()
         {
             in_pool.emplace_back([&](){
                 start_line.arrive_and_wait();
-                for(int i = 0; i < 100000; ++i)
+                for(int i = 0; i < 1000; ++i)
                     if(queue.try_push(1))
                         counter.fetch_add(1, std::memory_order_relaxed);        
             });

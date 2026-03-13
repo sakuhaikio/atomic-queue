@@ -1,7 +1,26 @@
-add_executable(my_lib_tests
-  test_queue.cpp
+set(TESTS)
+
+list(APPEND TESTS
+    test_queue
+    test_queue_spsc
+    test_queue_mpsc
+    test_queue_mpmc
 )
 
-target_link_libraries(my_lib_tests PRIVATE lockfree_ring_queue::lockfree_ring_queue)
+foreach(test_name IN LISTS TESTS)
+    
+    add_executable(
+        ${test_name}
+        ${test_name}.cpp
+    )
 
-add_test(NAME my_lib_tests COMMAND my_lib_tests)
+    target_link_libraries(
+        ${test_name} PRIVATE 
+        lockfree_ring_queue::lockfree_ring_queue)
+
+    add_test(
+        NAME ${test_name}
+        COMMAND ${test_name}
+    )
+
+endforeach()
