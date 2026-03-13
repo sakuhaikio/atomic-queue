@@ -51,6 +51,8 @@ public:
 
     ~queue() noexcept;
 
+    uint32_t max_size() const { return size_ + 1; }
+
     constexpr bool try_push(const T& t) noexcept
     { 
         return emplace(t);
